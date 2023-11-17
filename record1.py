@@ -1,0 +1,119 @@
+import cv2
+import numpy as np
+import mediapipe as mp
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+
+# initialize mediapipe
+mpHands = mp.solutions.hands
+hands = mpHands.Hands(max_num_hands=2, min_detection_confidence=0.7)
+mpDraw = mp.solutions.drawing_utils
+
+# Load the gesture recognizer model
+model = load_model('mp_hand_gesture')
+
+# Load class names
+f = open('gesture.names', 'r')
+classNames = f.read().split('\n')
+f.close()
+print(classNames)
+
+# Initialize the webcam
+cap = cv2.VideoCapture(0)
+
+# Video recording setup
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+record_video = False
+recorded_frames = []
+
+while True:
+    # Read each frame from the webcam
+    ret, frame = cap.read()
+
+    x, y, c = frame.shape
+
+    # Flip the frame vertically
+    frame = cv2.flip(frame, 1)
+    framergb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    # Get hand landmark prediction
+    result = hands.process(framergb)
+
+    class_names = [''] * 2  # Initialize class names for both hands
+
+    # post-process the result
+    if result.multi_hand_landmarks:
+        for i, hand_landmarks in enumerate(result.multi_hand_landmarks):
+            landmarks = []
+            for lm in hand_landmarks.landmark:
+                lmx = int(lm.x * x)
+                lmy = int(lm.y * y)
+                landmarks.append([lmx, lmy])
+
+            # Drawing landmarks on frames
+            mpDraw.draw_landmarks(frame, hand_landmarks, mpHands.HAND_CONNECTIONS)
+
+            # Record frames during hand movement
+            if record_video:
+                recorded_frames.append(frame.copy())
+
+            # Identify whether it's the right or left hand based on x-coordinate of the first landmark
+            if landmarks[0][0] < landmarks[9][0]:  # Assuming index 0 is the base of the palm and index 9 is the tip of the thumb
+                hand_side = 'Left Hand'
+            else:
+                hand_side = 'Right Hand'
+
+            # Predict gesture
+            prediction = model.predict([landmarks])
+            classID = np.argmax(prediction)
+            className = classNames[classID]
+
+            # Show the prediction and hand side on the frame
+            cv2.putText(frame, f'{hand_side}: {className}', (10, 50 + i * 30), cv2.FONT_HERSHEY_SIMPLEX,
+                        1, (0, 0, 255), 2, cv2.LINE_AA)
+
+    # Show recording status
+    status_text = 'Recording' if record_video else 'Not Recording'
+    cv2.putText(frame, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+
+    # Show the final output
+    cv2.imshow("Output", frame)
+
+    # Handle key presses
+    key = cv2.waitKey(1)
+    if key == ord('q'):
+        break
+    elif key == ord('r'):
+        # Start/stop video recording on 'r' key press
+        record_video = not record_video
+    elif key == ord('c'):
+        # Close the window on 'c' key press
+        break
+
+# Release the webcam
+cap.release()
+
+# Save the recorded hand movement video with the same framerate
+if recorded_frames:
+    # Get the framerate of the recorded video
+    fps = cap.get(cv2.CAP_PROP_FPS)
+
+    # Create video writer
+    out = cv2.VideoWriter('hand_movement.mp4', fourcc, fps, (recorded_frames[0].shape[1], recorded_frames[0].shape[0]))
+
+    for frame in recorded_frames:
+        # Write the frame to the video writer
+        out.write(frame)
+
+        # Display the video with only lines
+        cv2.imshow("Hand Movement - Lines Only", frame)
+
+        # Break the loop if 'q' key is pressed
+        if cv2.waitKey(1) == ord('q'):
+            break
+
+    # Release the video writer
+    out.release()
+
+    # Close the display window for lines only
+    cv2.destroyAllWindows()
